@@ -1,0 +1,172 @@
+<?php
+
+/**
+ * Implementation of hook_menu().
+ */
+function islandora_compound_viewer_menu() {
+  $items = array();
+  $items['admin/settings/islandora_compound_viewer'] = array(
+    'title' => t('Islandora Compound Viewer Settings'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('islandora_compound_viewer_admin'),   
+    'access arguments' => array('administer spms'),
+    'file' => 'islandora_compound_viewer.admin.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  return $items;
+}
+
+/**
+ * Implementation of hook_theme().
+ * @param string $existing
+ * @param string $type
+ * @param string $theme
+ * @param string $path
+ */
+function islandora_compound_viewer_theme($existing, $type, $theme, $path) {
+  return array(
+    'islandora_compound_viewer_children' => array(
+      'path' => drupal_get_path('module', 'islandora_compound_viewer') . '/templates',
+      'arguments' => array(
+        'thumbnails' => NULL,
+        'first_frame' => NULL,
+      ),
+      'template' => 'islandora_compound_viewer_children',
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_block().
+ * @param $op
+ * @param $delta
+ * @param $edit
+ */
+function islandora_compound_viewer_block($op = 'list', $delta = 0, $edit = array()) {
+  if ($op == 'list') {
+    $blocks['compound_object_viewer'] = array(
+      'info' => t('Compound Object'),
+      'weight' => 0,
+      'status' => 0,
+      'visibility' => 1,
+      'pages' => 'fedora/repository/*',
+      'region' => 'content',
+      'cache' => BLOCK_CACHE_PER_PAGE,
+    );
+    return $blocks;
+  }
+  elseif ($op == 'view') {
+    switch($delta) {
+      case 'compound_object_viewer':
+        $block = array(
+          'subject' => '',
+          'content' => islandora_compound_viewer_render()
+        );
+        break;
+    }
+    return $block;  
+  }
+}
+
+/**
+ * Render logic for displaying compound objects.
+ * If parent object, goto first child.
+ */
+function islandora_compound_viewer_render() {
+  module_load_include('inc', 'fedora_repository', 'api/fedora_utils');
+  $pid = arg(2);
+  
+  //@TODO: limit per content model to avoid unnecessary work.
+  
+  if (valid_pid($pid)) {
+  
+    $parent = islandora_compound_viewer_get_parent($pid);
+    
+    if (!$parent) {
+      // Object doesn't have a parent, check for children.
+      $children = islandora_compound_viewer_get_children($pid);
+      // If has children, goto first child
+      if (count($children) > 1) {
+        drupal_goto('fedora/repository/' . $children[0]['pid']);
+      }
+    }
+    else {
+      $children = islandora_compound_viewer_get_children($parent);
+    }
+    
+    if (count($children) > 1) {
+      $thumbnails = islandora_compound_viewer_render_thumbs($children, $pid);
+      jcarousel_add('islandora-compound-carousel');
+      return theme('islandora_compound_viewer_children', $thumbnails);  
+    }
+  }
+}
+
+/**
+ * Return object's parent pid.
+ * @param $pid
+ */
+function islandora_compound_viewer_get_parent($pid) {
+  module_load_include('inc', 'fedora_repository', 'api/fedora_item');
+  $object = new Fedora_Item($pid);
+  $rels = $object->get_relationships();
+  
+  foreach ($rels AS $rel) {
+    if ($rel['predicate'] == variable_get('islandora_compound_viewer_relationship', '')) {
+      return $rel['object'];
+    }
+  }
+}
+
+/**
+ * Return an array of child object pids.
+ * @param string $pid
+ */
+function islandora_compound_viewer_get_children($pid) {
+  module_load_include('inc', 'fedora_repository', 'api/fedora_utils');
+  $children = array();
+  
+  $query_string = "select \$object \$title from <#ri>
+    where \$object <dc:title> \$title
+    and \$object <fedora-model:state> <info:fedora/fedora-system:def/model#Active>
+    and \$object <fedora-rels-ext:" . variable_get('islandora_compound_viewer_relationship', '') . "> <info:fedora/$pid>
+    order by \$object";
+    
+  $query_string = urlencode($query_string);
+
+  $url = variable_get('fedora_repository_url', 'http://localhost:8080/fedora/risearch');
+  $url .= "?type=tuples&flush=TRUE&format=Sparql&lang=itql&stream=on&query=". $query_string;
+  $content = do_curl($url);
+  
+  $sparql = simplexml_load_string($content);
+  
+  $count = 0;
+  foreach ($sparql->results->result AS $result) {
+    $pid = (string) $result->object['uri'][0];
+    $pid = preg_replace('/^info:fedora\//', '', $pid);
+    $children[$count]['pid'] = $pid;
+    $children[$count]['title'] = $result->title;
+    $count++;
+  }
+  return $children;
+}
+
+/**
+ * Prepare thumbnails for theming.
+ * @param array $children
+ * @param string $current_pid
+ * @TODO: use theme functions/make themable
+ */
+function islandora_compound_viewer_render_thumbs($children, $current_pid) {
+  global $base_url;
+  
+  $output = '<ul class="islandora-compound-carousel jcarousel-skin-default">';
+  foreach ($children AS $child) {
+    $active_class = ($child['pid'] == $current_pid) ? 'class="active"' : '';
+    $child_url = $base_url . '/fedora/repository/' . $child['pid'];
+    $output .= '<li ' . $active_class . '><a href="' . $child_url . '"><img src="' . $child_url . '/TN' . '"/></a></li>';
+  }
+  $output .= '</ul>';
+  
+  return $output;
+}

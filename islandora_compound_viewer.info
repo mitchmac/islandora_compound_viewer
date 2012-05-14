@@ -1,0 +1,5 @@
+name = Islandora Compound Object Viewer
+description = "Display thumbnail links for a compound object's children"
+core = 6.x
+dependencies[] = fedora_repository
+dependencies[] = jcarousel

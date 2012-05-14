@@ -1,0 +1,3 @@
+Creates a Drupal block which renders an object's sibling thumbnails. If attempting to view a parent object, redirects to the first child.
+
+Requires jcarousel and fedora_repository
